@@ -34,6 +34,59 @@ enum v4l2_mpeg_video_bitrate_mode {
 };
 #endif
 
+#ifndef V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP
+#define V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP		(V4L2_CID_MPEG_BASE+600)
+#endif
+
+#ifndef V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP
+#define V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP		(V4L2_CID_MPEG_BASE+601)
+#endif
+
+#ifndef V4L2_CID_MPEG_VIDEO_HEVC_PROFILE
+#define V4L2_CID_MPEG_VIDEO_HEVC_PROFILE	(V4L2_CID_MPEG_BASE+615)
+enum v4l2_mpeg_video_hevc_profile {
+	V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN = 0,
+	V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_STILL_PICTURE = 1,
+	V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10 = 2,
+};
+#endif
+
+#ifndef V4L2_CID_MPEG_VIDEO_HEVC_LEVEL
+#define V4L2_CID_MPEG_VIDEO_HEVC_LEVEL		(V4L2_CID_MPEG_BASE+616)
+enum v4l2_mpeg_video_hevc_level {
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_1	= 0,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_2	= 1,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_2_1	= 2,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_3	= 3,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_3_1	= 4,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_4	= 5,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_4_1	= 6,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_5	= 7,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1	= 8,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_5_2	= 9,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_6	= 10,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_6_1	= 11,
+	V4L2_MPEG_VIDEO_HEVC_LEVEL_6_2	= 12,
+};
+#endif
+
+#ifndef V4L2_CID_MPEG_VIDEO_HEVC_TIER
+#define V4L2_CID_MPEG_VIDEO_HEVC_TIER		(V4L2_CID_MPEG_BASE+618)
+enum v4l2_mpeg_video_hevc_tier {
+	V4L2_MPEG_VIDEO_HEVC_TIER_MAIN = 0,
+	V4L2_MPEG_VIDEO_HEVC_TIER_HIGH = 1,
+};
+#endif
+
+#ifndef V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE
+#define V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE (V4L2_CID_MPEG_BASE+620)
+enum v4l2_cid_mpeg_video_hevc_loop_filter_mode {
+	V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED = 0,
+	V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_ENABLED = 1,
+	V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_DISABLED_AT_SLICE_BOUNDARY = 2,
+};
+#endif
+
 #define RKMPP_ENC_POLL_TIMEOUT_MS	100
 
 static struct rkmpp_fmt rkmpp_enc_fmts[] = {
@@ -113,7 +166,26 @@ static struct rkmpp_fmt rkmpp_enc_fmts[] = {
 			.max_height = 1088,
 			.step_height = RKMPP_MB_DIM,
 		}
-	}
+	},
+	/*
+	 * Must be the last one: it would be hidden when the HEVC encoder is
+	 * not available, see rkmpp_enc_init().
+	 */
+	{
+		.name = "H.265",
+		.fourcc = V4L2_PIX_FMT_HEVC,
+		.num_planes = 1,
+		.type = MPP_VIDEO_CodingHEVC,
+		.format = MPP_FMT_BUTT,
+		.frmsize = {
+			.min_width = 96,
+			.max_width = 1920,
+			.step_width = RKMPP_MB_DIM,
+			.min_height = 96,
+			.max_height = 1088,
+			.step_height = RKMPP_MB_DIM,
+		},
+	},
 };
 
 static int rkmpp_enc_apply_rc_cfg(struct rkmpp_enc_context *enc);
@@ -478,6 +550,44 @@ err:
 	RETURN_ERR(EINVAL, -1);
 }
 
+static int rkmpp_enc_apply_hevc_cfg(struct rkmpp_enc_context *enc)
+{
+	struct rkmpp_context *ctx = enc->ctx;
+	MppEncCfg cfg;
+	MPP_RET ret;
+
+	if (mpp_enc_cfg_init(&cfg)) {
+		LOGE("failed to init enc config\n");
+		RETURN_ERR(ENOMEM, -1);
+	}
+
+	ret = ctx->mpi->control(ctx->mpp, MPP_ENC_GET_CFG, cfg);
+	if (ret != MPP_OK) {
+		LOGE("failed to get enc config\n");
+		goto err;
+	}
+
+	mpp_enc_cfg_set_s32(cfg, "h265:profile", enc->hevc.profile);
+	/* The MPP would raise the level when it is too low for the size */
+	mpp_enc_cfg_set_s32(cfg, "h265:level", enc->hevc.level);
+	mpp_enc_cfg_set_s32(cfg, "h265:tier", enc->hevc.tier);
+
+	mpp_enc_cfg_set_s32(cfg, "h265:qp_max", enc->max_qp ? enc->max_qp : 51);
+	mpp_enc_cfg_set_s32(cfg, "h265:qp_min", enc->min_qp ? enc->min_qp : 10);
+
+	ret = ctx->mpi->control(ctx->mpp, MPP_ENC_SET_CFG, cfg);
+	if (ret != MPP_OK) {
+		LOGE("failed to set enc config: %d\n", ret);
+		goto err;
+	}
+
+	mpp_enc_cfg_deinit(cfg);
+	return 0;
+err:
+	mpp_enc_cfg_deinit(cfg);
+	RETURN_ERR(EINVAL, -1);
+}
+
 static int rkmpp_enc_apply_vp8_cfg(struct rkmpp_enc_context *enc)
 {
 	struct rkmpp_context *ctx = enc->ctx;
@@ -722,6 +832,9 @@ static int rkmpp_enc_streamon(struct rkmpp_enc_context *enc,
 	case V4L2_PIX_FMT_MJPEG:
 		enc->type = MJPEG;
 		break;
+	case V4L2_PIX_FMT_HEVC:
+		enc->type = HEVC;
+		break;
 	default:
 		RETURN_ERR(errno, -1);
 	}
@@ -771,6 +884,19 @@ static int rkmpp_enc_streamon(struct rkmpp_enc_context *enc,
 			LOGE("failed to apply mjpeg cfg\n");
 			goto err_destroy_mpp;
 		}
+	} else if (enc->type == HEVC) {
+		/* Apply hevc's special configs */
+		if (rkmpp_enc_apply_hevc_cfg(enc) < 0) {
+			LOGE("failed to apply hevc cfg\n");
+			goto err_destroy_mpp;
+		}
+
+		/*
+		 * Let the MPP attach VPS/SPS/PPS to each IDR frame, there is
+		 * no separate header packet for HEVC.
+		 */
+		enc->header_mode = MPP_ENC_HEADER_MODE_EACH_IDR;
+		enc->needs_header = false;
 	}
 
 	if (enc->header)
@@ -891,6 +1017,21 @@ static int rkmpp_enc_s_parm(struct rkmpp_enc_context *enc,
 	return 0;
 }
 
+static bool rkmpp_enc_has_hevc(struct rkmpp_enc_context *enc)
+{
+	struct rkmpp_context *ctx = enc->ctx;
+	unsigned int i;
+
+	for (i = 0; i < ctx->num_formats; i++) {
+		if (ctx->formats[i].fourcc != V4L2_PIX_FMT_HEVC)
+			continue;
+
+		return RKMPP_HAS_FORMAT(ctx, &ctx->formats[i]);
+	}
+
+	return false;
+}
+
 static int rkmpp_enc_queryctrl(struct rkmpp_enc_context *enc,
 			       struct v4l2_queryctrl *query_ctrl)
 {
@@ -911,6 +1052,16 @@ static int rkmpp_enc_queryctrl(struct rkmpp_enc_context *enc,
 		break;
 	case V4L2_CID_MPEG_VIDEO_VP8_PROFILE:
 		query_ctrl->minimum = V4L2_MPEG_VIDEO_VP8_PROFILE_0;
+		query_ctrl->maximum = query_ctrl->minimum;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_PROFILE:
+		if (!rkmpp_enc_has_hevc(enc)) {
+			LOGV(1, "HEVC is not available\n");
+			RETURN_ERR(EINVAL, -1);
+		}
+
+		/* Only support the Main profile */
+		query_ctrl->minimum = V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN;
 		query_ctrl->maximum = query_ctrl->minimum;
 		break;
 		/* TODO: fill info for other supported ctrls */
@@ -962,6 +1113,14 @@ static int rkmpp_enc_querymenu(struct rkmpp_enc_context *enc,
 			RETURN_ERR(EINVAL, -1);
 		}
 		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_PROFILE:
+		if (!rkmpp_enc_has_hevc(enc) ||
+		    query_menu->index != V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN) {
+			LOGV(1, "unsupported HEVC profile: %x\n",
+			     query_menu->index);
+			RETURN_ERR(EINVAL, -1);
+		}
+		break;
 	default:
 		LOGV(1, "unsupported menu: %x\n", query_menu->id);
 		RETURN_ERR(EINVAL, -1);
@@ -980,6 +1139,41 @@ static int rkmpp_enc_h264_convert_profile(int profile)
 		return MPP_H264_PROFILE_MAIN;
 	case V4L2_MPEG_VIDEO_H264_PROFILE_HIGH:
 		return MPP_H264_PROFILE_HIGH;
+	default:
+		return -1;
+	}
+}
+
+/* Convert V4L2 HEVC level to general_level_idc */
+static int rkmpp_enc_hevc_convert_level(int level)
+{
+	switch (level) {
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_1:
+		return 30;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_2:
+		return 60;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_2_1:
+		return 63;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_3:
+		return 90;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_3_1:
+		return 93;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_4:
+		return 120;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_4_1:
+		return 123;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_5:
+		return 150;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1:
+		return 153;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_5_2:
+		return 156;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_6:
+		return 180;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_6_1:
+		return 183;
+	case V4L2_MPEG_VIDEO_HEVC_LEVEL_6_2:
+		return 186;
 	default:
 		return -1;
 	}
@@ -1143,6 +1337,85 @@ static int rkmpp_enc_s_ext_ctrls(struct rkmpp_enc_context *enc,
 
 			LOGV(1, "h264 separate header: %d\n", enc->h264.separate_header);
 			break;
+		case V4L2_CID_MPEG_VIDEO_HEVC_PROFILE:
+			if (ctrl->value != V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN) {
+				LOGE("only support hevc main profile\n");
+				RETURN_ERR(EINVAL, -1);
+			}
+
+			enc->hevc.profile = MPP_HEVC_PROFILE_MAIN;
+			LOGV(1, "hevc profile: %d\n", enc->hevc.profile);
+
+			if (ctx->mpp_streaming && enc->type == HEVC &&
+			    rkmpp_enc_apply_hevc_cfg(enc) < 0) {
+				LOGE("failed to apply hevc profile\n");
+				RETURN_ERR(errno, -1);
+			}
+			break;
+		case V4L2_CID_MPEG_VIDEO_HEVC_LEVEL: {
+			int level = rkmpp_enc_hevc_convert_level(ctrl->value);
+
+			if (level < 0) {
+				LOGE("unsupported hevc level: %d\n",
+				     ctrl->value);
+				RETURN_ERR(EINVAL, -1);
+			}
+
+			enc->hevc.level = level;
+			LOGV(1, "hevc level: %d\n", enc->hevc.level);
+
+			if (ctx->mpp_streaming && enc->type == HEVC &&
+			    rkmpp_enc_apply_hevc_cfg(enc) < 0) {
+				LOGE("failed to apply hevc level\n");
+				RETURN_ERR(errno, -1);
+			}
+			break;
+		}
+		case V4L2_CID_MPEG_VIDEO_HEVC_TIER:
+			if (ctrl->value != V4L2_MPEG_VIDEO_HEVC_TIER_MAIN) {
+				LOGE("only support hevc main tier\n");
+				RETURN_ERR(EINVAL, -1);
+			}
+
+			enc->hevc.tier = MPP_HEVC_TIER_MAIN;
+			break;
+		case V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE:
+			if (ctrl->value !=
+			    V4L2_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE_ENABLED) {
+				LOGE("not supporting disabling loop filter\n");
+				RETURN_ERR(EINVAL, -1);
+			}
+			break;
+		case V4L2_CID_MPEG_VIDEO_HEVC_MAX_QP:
+			if (ctrl->value < 0 || ctrl->value > 51) {
+				LOGE("invalid hevc max qp: %d\n", ctrl->value);
+				RETURN_ERR(EINVAL, -1);
+			}
+
+			enc->max_qp = ctrl->value;
+			LOGV(1, "hevc max qp: %d\n", enc->max_qp);
+
+			if (ctx->mpp_streaming && enc->type == HEVC &&
+			    rkmpp_enc_apply_hevc_cfg(enc) < 0) {
+				LOGE("failed to apply hevc max qp\n");
+				RETURN_ERR(errno, -1);
+			}
+			break;
+		case V4L2_CID_MPEG_VIDEO_HEVC_MIN_QP:
+			if (ctrl->value < 0 || ctrl->value > 51) {
+				LOGE("invalid hevc min qp: %d\n", ctrl->value);
+				RETURN_ERR(EINVAL, -1);
+			}
+
+			enc->min_qp = ctrl->value;
+			LOGV(1, "hevc min qp: %d\n", enc->min_qp);
+
+			if (ctx->mpp_streaming && enc->type == HEVC &&
+			    rkmpp_enc_apply_hevc_cfg(enc) < 0) {
+				LOGE("failed to apply hevc min qp\n");
+				RETURN_ERR(errno, -1);
+			}
+			break;
 		case V4L2_CID_MPEG_VIDEO_VPX_MAX_QP:
 			enc->max_qp = ctrl->value;
 			LOGV(1, "vpx max qp: %d\n", enc->max_qp);
@@ -1269,6 +1542,14 @@ void *rkmpp_enc_init(struct rkmpp_context *ctx)
 	ctx->num_formats = ARRAY_SIZE(rkmpp_enc_fmts);
 	enc->ctx = ctx;
 
+	/* Hide the HEVC format (the last one) when it is not available */
+	if (rkmpp_enc_fmts[ctx->num_formats - 1].fourcc == V4L2_PIX_FMT_HEVC &&
+	    mpp_check_support_format(MPP_CTX_ENC,
+				     MPP_VIDEO_CodingHEVC) != MPP_OK) {
+		LOGV(1, "HEVC encoder is not available\n");
+		ctx->num_formats--;
+	}
+
 	if (!ctx->max_width)
 		ctx->max_width = MAX_ENC_WIDTH;
 
@@ -1278,6 +1559,10 @@ void *rkmpp_enc_init(struct rkmpp_context *ctx)
 	enc->h264.profile = MPP_H264_PROFILE_HIGH;
 	enc->h264.level = 40; /* 1080p@30fps */
 	enc->h264.separate_header = true;
+
+	enc->hevc.profile = MPP_HEVC_PROFILE_MAIN;
+	enc->hevc.level = MPP_HEVC_LEVEL_4; /* 1080p@30fps */
+	enc->hevc.tier = MPP_HEVC_TIER_MAIN;
 
 	enc->max_qp = enc->min_qp = 0;
 

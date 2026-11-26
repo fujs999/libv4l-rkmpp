@@ -25,6 +25,12 @@
 #define MPP_H264_PROFILE_MAIN		77
 #define MPP_H264_PROFILE_HIGH		100
 
+/* The general_profile_idc of the HEVC Main profile */
+#define MPP_HEVC_PROFILE_MAIN		1
+/* The general_level_idc of the HEVC level 4 */
+#define MPP_HEVC_LEVEL_4		120
+#define MPP_HEVC_TIER_MAIN		0
+
 /* The MPP is using 1K for header buf. */
 #define MAX_HEADER_BYTES	(1 << 10)
 
@@ -32,6 +38,7 @@
  * struct rkmpp_enc_context - Context private data for encoder
  * @ctx:		Common context data.
  * @h264:		Enc config for H264.
+ * @hevc:		Enc config for HEVC.
  * @vp8:		Enc config for VP8.
  * @mjpeg:		Enc config for MJPEG.
  * @type:		Encoder format type.
@@ -63,6 +70,12 @@ struct rkmpp_enc_context {
 	} h264;
 
 	struct {
+		int profile; /* general_profile_idc */
+		int level; /* general_level_idc */
+		int tier;
+	} hevc;
+
+	struct {
 		bool is_ivf;
 	} vp8;
 
@@ -74,6 +87,7 @@ struct rkmpp_enc_context {
 		H264,
 		VP8,
 		MJPEG,
+		HEVC,
 	} type;
 
 	int max_qp;
